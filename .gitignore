@@ -217,6 +217,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Planning Poker frontend and deployment artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/.vite/
+MinIO Console.html
+MinIO Console_files/
+
 
 Deployment_Planning_Poker_Poland_Server.docx
 Development_Plan_Planning_Poker.md
