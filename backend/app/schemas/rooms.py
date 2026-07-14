@@ -1,6 +1,5 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -89,6 +88,51 @@ class ParticipantSessionResponse(BaseModel):
     participant: ParticipantResponse
     participant_token: str | None = None
     restored: bool
+
+
+class RoundStartRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    client_command_id: UUID
+    task_id: UUID | None = None
+
+
+class NewRoundRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    client_command_id: UUID
+
+
+class VoteRequest(BaseModel):
+    card_value: str = Field(min_length=1, max_length=32)
+
+
+class RevealRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    client_command_id: UUID
+
+
+class FinishRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    client_command_id: UUID
+
+
+class VoteResponse(BaseModel):
+    round_id: UUID
+    card_value: str
+    version: int
+
+
+class RoundResponse(BaseModel):
+    id: UUID
+    task_id: UUID | None
+    sequence: int
+    state: str
+    version: int
+
+
+class RevealResponse(BaseModel):
+    round: RoundResponse
+    revealed_votes: list[dict[str, object]]
+    metrics: dict[str, object]
 
 
 class ErrorBody(BaseModel):
