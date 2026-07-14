@@ -186,6 +186,12 @@ async def _find_participant_by_token(
     return (await session.scalars(query)).one_or_none()
 
 
+async def find_participant_by_token(
+    session: AsyncSession, room_id: UUID, raw_token: str
+) -> Participant | None:
+    return await _find_participant_by_token(session, room_id, raw_token)
+
+
 async def _require_participant(
     session: AsyncSession, room_id: UUID, raw_token: str | None
 ) -> Participant:
@@ -207,4 +213,3 @@ def _normalize_name(value: str) -> str:
     if not normalized:
         raise DomainError("invalid_name", "Имя не может быть пустым")
     return normalized
-

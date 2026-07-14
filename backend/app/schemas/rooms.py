@@ -68,6 +68,7 @@ class ParticipantResponse(BaseModel):
     display_name: str
     is_online: bool
     is_owner: bool
+    has_voted: bool = False
 
 
 class RoomResponse(BaseModel):
@@ -98,4 +99,3 @@ class ErrorBody(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorBody
-

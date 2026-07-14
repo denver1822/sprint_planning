@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
+from app.api.routes.websocket import router as websocket_router
 from app.core.config import get_settings
 from app.core.errors import DomainError
 from app.core.logging import RequestLoggingMiddleware
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router, prefix="/api")
+app.include_router(websocket_router, prefix="/ws")
 
 
 @app.exception_handler(DomainError)
