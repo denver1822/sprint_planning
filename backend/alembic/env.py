@@ -11,7 +11,8 @@ config = context.config
 sync_database_url = get_settings().database_url.replace(
     "postgresql+asyncpg://", "postgresql+psycopg://"
 )
-config.set_main_option("sqlalchemy.url", sync_database_url)
+# ConfigParser treats '%' as interpolation. Escape URL-encoded database names/passwords.
+config.set_main_option("sqlalchemy.url", sync_database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import DomainError
-from app.db.models import RoomAction, RoundResult, Vote, VotingRound
+from app.db.models import RoomAction, RoundResult, TaskItem, Vote, VotingRound
 from app.schemas.rooms import (
     FinishRequest,
     NewRoundRequest,
@@ -33,7 +33,14 @@ async def start_round(
         raise DomainError(
             "invalid_room_state", "Раунд можно начать только из лобби", status_code=409
         )
-    round_ = await _create_round(session, room.id, data.task_id)
+    task_id = data.task_id if data.task_id is not None else room.active_task_id
+    if task_id is not None:
+        task = await session.get(TaskItem, task_id)
+        if task is None or task.room_id != room.id:
+            raise DomainError("task_not_found", "Задача не найдена в этой комнате", status_code=404)
+        if task.is_excluded:
+            raise DomainError("task_excluded", "Исключённую задачу нельзя оценивать", status_code=409)
+    round_ = await _create_round(session, room.id, task_id)
     room.state, room.version = "VOTING", room.version + 1
     session.add(
         RoomAction(
@@ -80,6 +87,29 @@ async def cast_vote(
     room.version += 1
     await session.commit()
     return VoteResponse(round_id=round_.id, card_value=vote.card_value, version=room.version)
+
+
+async def cancel_vote(
+    session: AsyncSession, code: str, round_id: UUID, token: str | None
+) -> int:
+    room = await get_room_or_404(session, code, lock=True)
+    participant = await _active_actor(session, room.id, token)
+    if participant.id == room.owner_participant_id:
+        raise DomainError("owner_cannot_vote", "Владелец не голосует в MVP", status_code=403)
+    round_ = await _active_round(session, room.id, round_id)
+    vote = (
+        await session.scalars(
+            select(Vote)
+            .where(Vote.round_id == round_.id, Vote.participant_id == participant.id)
+            .with_for_update()
+        )
+    ).one_or_none()
+    if vote is None:
+        raise DomainError("vote_not_found", "Подтверждённый голос не найден", status_code=404)
+    await session.delete(vote)
+    room.version += 1
+    await session.commit()
+    return room.version
 
 
 async def reveal_round(

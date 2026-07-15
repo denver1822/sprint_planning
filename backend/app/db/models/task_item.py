@@ -32,6 +32,5 @@ class TaskItem(TimestampMixin, Base):
     jira_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     jira_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
-    room: Mapped["Room"] = relationship(back_populates="tasks")
+    room: Mapped["Room"] = relationship(back_populates="tasks", foreign_keys=[room_id])
     rounds: Mapped[list["VotingRound"]] = relationship(back_populates="task")
-

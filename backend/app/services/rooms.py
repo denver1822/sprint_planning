@@ -16,6 +16,7 @@ from app.schemas.rooms import (
     RoomJoinRequest,
     RoomResponse,
     RoomUpdateRequest,
+    TaskResponse,
 )
 from app.services.decks import deck_response, resolve_cards
 
@@ -24,7 +25,11 @@ def _room_query(code: str):
     return (
         select(Room)
         .where(Room.public_code == code)
-        .options(selectinload(Room.deck), selectinload(Room.participants))
+        .options(
+            selectinload(Room.deck),
+            selectinload(Room.participants),
+            selectinload(Room.tasks),
+        )
     )
 
 
@@ -61,6 +66,16 @@ def serialize_room(room: Room) -> RoomResponse:
         version=room.version,
         deck=deck_response(room.deck.kind, room.deck.cards),
         participants=participants,
+        tasks=[
+            TaskResponse(
+                id=task.id,
+                title=task.title,
+                position=task.position,
+                is_excluded=task.is_excluded,
+            )
+            for task in room.tasks
+        ],
+        active_task_id=room.active_task_id,
         created_at=room.created_at,
         updated_at=room.updated_at,
     )
@@ -89,7 +104,9 @@ async def create_room(session: AsyncSession, payload: RoomCreateRequest) -> Part
     await session.flush()
     room.owner_participant_id = owner.id
     await session.commit()
-    await session.refresh(room, attribute_names=["deck", "participants", "created_at", "updated_at"])
+    await session.refresh(
+        room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
+    )
 
     return ParticipantSessionResponse(
         room=serialize_room(room),
@@ -116,7 +133,9 @@ async def join_room(
             participant.is_online = True
             participant.last_seen_at = now
             await session.commit()
-            await session.refresh(room, attribute_names=["deck", "participants", "created_at", "updated_at"])
+            await session.refresh(
+                room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
+            )
             return ParticipantSessionResponse(
                 room=serialize_room(room),
                 participant=serialize_participant(participant, room.owner_participant_id),
@@ -137,7 +156,9 @@ async def join_room(
     )
     session.add(participant)
     await session.commit()
-    await session.refresh(room, attribute_names=["deck", "participants", "created_at", "updated_at"])
+    await session.refresh(
+        room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
+    )
     return ParticipantSessionResponse(
         room=serialize_room(room),
         participant=serialize_participant(participant, room.owner_participant_id),
@@ -172,7 +193,9 @@ async def update_room(
         _apply_deck_update(room.deck, payload.deck)
     room.version += 1
     await session.commit()
-    await session.refresh(room, attribute_names=["deck", "participants", "created_at", "updated_at"])
+    await session.refresh(
+        room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
+    )
     return serialize_room(room)
 
 

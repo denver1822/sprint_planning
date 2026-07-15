@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import participant_token
 from app.db.session import get_db_session
 from app.realtime.manager import room_connections
+from app.services.realtime import room_snapshot
 from app.schemas.rooms import (
+    ActiveTaskRequest,
     FinishRequest,
     NewRoundRequest,
     ParticipantSessionResponse,
@@ -17,13 +19,18 @@ from app.schemas.rooms import (
     RoomJoinRequest,
     RoomResponse,
     RoomUpdateRequest,
+    RoundHistoryResponse,
     RoundResponse,
     RoundStartRequest,
     VoteRequest,
     VoteResponse,
+    TaskCreateRequest,
+    TaskReorderRequest,
+    TaskResponse,
 )
 from app.services.rooms import create_room, get_room_or_404, join_room, serialize_room, update_room
-from app.services.voting import cast_vote, finish_room, new_round, reveal_round, start_round
+from app.services.tasks import create_task, reorder_tasks, set_active_task
+from app.services.voting import cancel_vote, cast_vote, finish_room, new_round, reveal_round, start_round
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 Session = Annotated[AsyncSession, Depends(get_db_session)]
@@ -40,6 +47,43 @@ async def create_room_endpoint(
 @router.get("/{code}", response_model=RoomResponse)
 async def get_room_endpoint(code: str, session: Session) -> RoomResponse:
     return serialize_room(await get_room_or_404(session, code))
+
+
+@router.get("/{code}/snapshot")
+async def get_room_snapshot_endpoint(code: str, session: Session) -> dict[str, object]:
+    """Return the current realtime-safe snapshot for HTTP resynchronization."""
+    return await room_snapshot(session, code)
+
+
+@router.get("/{code}/history", response_model=list[RoundHistoryResponse])
+async def get_history_endpoint(code: str, session: Session) -> list[RoundHistoryResponse]:
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.db.models import VotingRound
+
+    room = await get_room_or_404(session, code)
+    rounds = (
+        await session.scalars(
+            select(VotingRound)
+            .where(VotingRound.room_id == room.id, VotingRound.state == "REVEALED")
+            .options(selectinload(VotingRound.result), selectinload(VotingRound.task))
+            .order_by(VotingRound.sequence)
+        )
+    ).all()
+    return [
+        RoundHistoryResponse(
+            id=round_.id,
+            sequence=round_.sequence,
+            task_id=round_.task_id,
+            task_title=round_.task.title if round_.task else None,
+            revealed_at=round_.revealed_at,
+            revealed_votes=round_.result.revealed_votes,
+            metrics=round_.result.metrics,
+        )
+        for round_ in rounds
+        if round_.result is not None and round_.revealed_at is not None
+    ]
 
 
 @router.post("/{code}/join", response_model=ParticipantSessionResponse)
@@ -60,6 +104,28 @@ async def update_room_endpoint(
     token: ParticipantToken,
 ) -> RoomResponse:
     return await update_room(session, code, payload, token)
+
+
+@router.post("/{code}/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task_endpoint(
+    code: str, payload: TaskCreateRequest, session: Session, token: ParticipantToken
+) -> TaskResponse:
+    task, _ = await create_task(session, code, payload, token)
+    return task
+
+
+@router.put("/{code}/tasks/order", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_tasks_endpoint(
+    code: str, payload: TaskReorderRequest, session: Session, token: ParticipantToken
+) -> None:
+    await reorder_tasks(session, code, payload, token)
+
+
+@router.put("/{code}/active-task", status_code=status.HTTP_204_NO_CONTENT)
+async def set_active_task_endpoint(
+    code: str, payload: ActiveTaskRequest, session: Session, token: ParticipantToken
+) -> None:
+    await set_active_task(session, code, payload, token)
 
 
 @router.post("/{code}/rounds", response_model=RoundResponse)
@@ -91,6 +157,25 @@ async def vote_endpoint(
         },
     )
     return result
+
+
+@router.delete("/{code}/rounds/{round_id}/vote", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_vote_endpoint(
+    code: str, round_id: UUID, session: Session, token: ParticipantToken
+) -> None:
+    version = await cancel_vote(session, code, round_id, token)
+    participant = await _participant_for_vote(session, code, token)
+    await room_connections.broadcast(
+        code,
+        {
+            "type": "vote.status_changed",
+            "payload": {
+                "participant_id": str(participant.id),
+                "has_voted": False,
+                "version": version,
+            },
+        },
+    )
 
 
 @router.post("/{code}/rounds/{round_id}/reveal", response_model=RevealResponse)

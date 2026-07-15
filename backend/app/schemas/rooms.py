@@ -57,6 +57,28 @@ class RoomUpdateRequest(BaseModel):
         return self
 
 
+class TaskCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    expected_version: int = Field(ge=0)
+
+
+class TaskReorderRequest(BaseModel):
+    task_ids: list[UUID] = Field(min_length=1)
+    expected_version: int = Field(ge=0)
+
+
+class ActiveTaskRequest(BaseModel):
+    task_id: UUID | None = None
+    expected_version: int = Field(ge=0)
+
+
+class TaskResponse(BaseModel):
+    id: UUID
+    title: str
+    position: int
+    is_excluded: bool
+
+
 class DeckResponse(BaseModel):
     kind: DeckKind
     cards: list[CardInput]
@@ -79,6 +101,8 @@ class RoomResponse(BaseModel):
     version: int
     deck: DeckResponse
     participants: list[ParticipantResponse]
+    tasks: list[TaskResponse] = Field(default_factory=list)
+    active_task_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -131,6 +155,16 @@ class RoundResponse(BaseModel):
 
 class RevealResponse(BaseModel):
     round: RoundResponse
+    revealed_votes: list[dict[str, object]]
+    metrics: dict[str, object]
+
+
+class RoundHistoryResponse(BaseModel):
+    id: UUID
+    sequence: int
+    task_id: UUID | None
+    task_title: str | None
+    revealed_at: datetime
     revealed_votes: list[dict[str, object]]
     metrics: dict[str, object]
 
