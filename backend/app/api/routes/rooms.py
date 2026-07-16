@@ -11,6 +11,10 @@ from app.services.realtime import room_snapshot
 from app.schemas.rooms import (
     ActiveTaskRequest,
     FinishRequest,
+    JiraImportRequest,
+    JiraImportResponse,
+    JiraPreviewRequest,
+    JiraPreviewResponse,
     NewRoundRequest,
     ParticipantSessionResponse,
     RevealRequest,
@@ -22,6 +26,7 @@ from app.schemas.rooms import (
     RoundHistoryResponse,
     RoundResponse,
     RoundStartRequest,
+    SessionSummaryResponse,
     VoteRequest,
     VoteResponse,
     TaskCreateRequest,
@@ -29,6 +34,8 @@ from app.schemas.rooms import (
     TaskResponse,
 )
 from app.services.rooms import create_room, get_room_or_404, join_room, serialize_room, update_room
+from app.services.jira import import_jira, preview_jira
+from app.services.analytics import session_summary
 from app.services.tasks import create_task, reorder_tasks, set_active_task
 from app.services.voting import cancel_vote, cast_vote, finish_room, new_round, reveal_round, start_round
 
@@ -86,6 +93,17 @@ async def get_history_endpoint(code: str, session: Session) -> list[RoundHistory
     ]
 
 
+@router.get("/{code}/summary", response_model=SessionSummaryResponse)
+async def get_session_summary_endpoint(
+    code: str, session: Session, token: ParticipantToken
+) -> SessionSummaryResponse:
+    from app.services.rooms import _require_participant
+
+    room = await get_room_or_404(session, code)
+    await _require_participant(session, room.id, token)
+    return await session_summary(session, code)
+
+
 @router.post("/{code}/join", response_model=ParticipantSessionResponse)
 async def join_room_endpoint(
     code: str,
@@ -126,6 +144,20 @@ async def set_active_task_endpoint(
     code: str, payload: ActiveTaskRequest, session: Session, token: ParticipantToken
 ) -> None:
     await set_active_task(session, code, payload, token)
+
+
+@router.post("/{code}/jira/preview", response_model=JiraPreviewResponse)
+async def jira_preview_endpoint(
+    code: str, payload: JiraPreviewRequest, session: Session, token: ParticipantToken
+) -> JiraPreviewResponse:
+    return await preview_jira(session, code, payload, token)
+
+
+@router.post("/{code}/jira/import", response_model=JiraImportResponse)
+async def jira_import_endpoint(
+    code: str, payload: JiraImportRequest, session: Session, token: ParticipantToken
+) -> JiraImportResponse:
+    return await import_jira(session, code, payload, token)
 
 
 @router.post("/{code}/rounds", response_model=RoundResponse)

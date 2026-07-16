@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 
-import { api, type HistoryItem, type Reveal, type Room, type Round, type Task, sessionStore } from './api'
+import { api, type HistoryItem, type JiraIssue, type Reveal, type Room, type Round, type SessionSummary, type Task, sessionStore } from './api'
 import { type RoomSocketMessage, useRoomSocket } from './realtime/useRoomSocket'
 
 const decks = [
@@ -38,6 +38,7 @@ function RoomScreen({ code }: { code: string }) {
   const [room, setRoom] = useState<Room | null>(null)
   const [round, setRound] = useState<Round | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])
+  const [summary, setSummary] = useState<SessionSummary | null>(null)
   const [error, setError] = useState('')
   const [joinName, setJoinName] = useState('')
   const [loading, setLoading] = useState(true)
@@ -59,13 +60,14 @@ function RoomScreen({ code }: { code: string }) {
         participants: current.participants.map(participant => ({ ...participant, has_voted: false })),
       } : current)
     }
-    if (message.type === 'round.revealed') { const reveal = payload as Reveal; void api.getHistory(code).then(setHistory); setRound(reveal.round); setRoom(current => current ? { ...current, state: 'REVEALED', version: reveal.round.version } : current) }
+    if (message.type === 'round.revealed') { const reveal = payload as Reveal; void api.getHistory(code).then(setHistory); if (token) void api.getSessionSummary(code, token).then(setSummary); setRound(reveal.round); setRoom(current => current ? { ...current, state: 'REVEALED', version: reveal.round.version } : current) }
     if (message.type === 'room.finished' && payload) setRoom(payload as unknown as Room)
-  }, [code])
+  }, [code, token])
   const { status } = useRoomSocket({ roomCode: code, participantToken: token, onMessage: onSocketMessage })
 
   useEffect(() => { api.getRoom(code).then(value => { setRoom(value); setLoading(false) }).catch(e => { setError(e.message); setLoading(false) }) }, [code])
   useEffect(() => { api.getHistory(code).then(setHistory).catch(() => undefined) }, [code])
+  useEffect(() => { if (token) void api.getSessionSummary(code, token).then(setSummary).catch(() => undefined) }, [code, token])
   useEffect(() => {
     if (!token) return
     const synchronize = () => {
@@ -97,7 +99,23 @@ function RoomScreen({ code }: { code: string }) {
   if (!token || !self) return <main className="join-page"><section><span className="eyebrow">Приглашение в комнату</span><h1>{room.name}</h1><p>Введите имя, чтобы присоединиться к оценке.</p><form onSubmit={join}><label>Ваше имя<input value={joinName} onChange={e => setJoinName(e.target.value)} required autoFocus /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="primary">Войти в комнату</button></form></section></main>
 
   const isOwner = self.is_owner
-  return <main className="room-shell"><header className="room-header"><a className="brand" href="/">PP</a><div><span className="eyebrow">Комната</span><h1>{room.name}</h1></div><div className="connection" aria-label="Статус соединения"><i className={status} />{status === 'connected' ? 'В сети' : 'Переподключение'}</div><button className="secondary" onClick={() => navigator.clipboard.writeText(window.location.href)}>Скопировать ссылку</button></header>{error && <p className="toast" role="alert">{error}</p>}<div className="room-grid"><aside className="sidebar"><section className="panel"><h2>Участники <span>{room.participants.length}</span></h2><ul className="participants">{room.participants.map(p => <li key={p.id}><i className={p.is_online ? 'online' : 'offline'} /><span>{p.display_name}{p.is_owner && ' · владелец'}</span>{room.state === 'VOTING' && p.has_voted && <b aria-label="Проголосовал">✓</b>}</li>)}</ul></section><TaskList room={room} token={token} canManage={isOwner} onAction={action} />{isOwner && <RoomSettings room={room} token={token} onError={setError} onUpdated={setRoom} />}</aside><section className="game"><RoundPanel room={room} round={round} self={self} token={token} onAction={action} onError={setError} onReveal={() => { void api.getHistory(code).then(setHistory) }} /><section className="panel history"><h2>История раундов</h2>{history.length ? history.map(item => <div className="history-row" key={item.id}><span>Раунд {item.sequence}{item.task_title ? ` · ${item.task_title}` : ''}</span><strong>{item.revealed_votes.map(v => v.card_value).join(' · ')}</strong><small>{String(item.metrics.vote_count ?? 0)} голосов</small></div>) : <p className="muted">Раскрытые раунды появятся здесь.</p>}</section></section></div>{isOwner && room.state !== 'FINISHED' && <button className="finish" onClick={() => action(() => api.finish(code, room.version, token))}>Завершить сессию</button>}</main>
+  return <main className="room-shell"><header className="room-header"><a className="brand" href="/">PP</a><div><span className="eyebrow">Комната</span><h1>{room.name}</h1></div><div className="connection" aria-label="Статус соединения"><i className={status} />{status === 'connected' ? 'В сети' : 'Переподключение'}</div><button className="secondary" onClick={() => navigator.clipboard.writeText(window.location.href)}>Скопировать ссылку</button></header>{error && <p className="toast" role="alert">{error}</p>}<div className="room-grid"><aside className="sidebar"><section className="panel"><h2>Участники <span>{room.participants.length}</span></h2><ul className="participants">{room.participants.map(p => <li key={p.id}><i className={p.is_online ? 'online' : 'offline'} /><span>{p.display_name}{p.is_owner && ' · владелец'}</span>{room.state === 'VOTING' && p.has_voted && <b aria-label="Проголосовал">✓</b>}</li>)}</ul></section><TaskList room={room} token={token} canManage={isOwner} onAction={action} />{isOwner && <JiraPanel room={room} token={token} onAction={action} />}{isOwner && <RoomSettings room={room} token={token} onError={setError} onUpdated={setRoom} />}</aside><section className="game"><RoundPanel room={room} round={round} self={self} token={token} onAction={action} onError={setError} onReveal={() => { void api.getHistory(code).then(setHistory); void api.getSessionSummary(code, token).then(setSummary) }} /><section className="panel history"><h2>История раундов</h2>{history.length ? history.map(item => <div className="history-row" key={item.id}><span>Раунд {item.sequence}{item.task_title ? ` · ${item.task_title}` : ''}</span><strong>{item.revealed_votes.map(v => v.card_value).join(' · ')}</strong><small>{String(item.metrics.vote_count ?? 0)} голосов · среднее {item.metrics.mean === null ? '—' : String(item.metrics.mean)} · согласие {item.metrics.agreement_index === null ? '—' : `${Math.round(Number(item.metrics.agreement_index) * 100)}%`}</small></div>) : <p className="muted">Раскрытые раунды появятся здесь.</p>}<SessionSummaryPanel summary={summary} /></section></section></div>{isOwner && room.state !== 'FINISHED' && <button className="finish" onClick={() => action(() => api.finish(code, room.version, token))}>Завершить сессию</button>}</main>
+}
+
+function SessionSummaryPanel({ summary }: { summary: SessionSummary | null }) {
+  if (!summary || !summary.revealed_round_count) return null
+  return <div className="session-summary"><h3>Сводка сессии</h3><p>{summary.revealed_round_count} раундов · {summary.total_vote_count} голосов · точное согласие: {summary.exact_consensus_count}</p><p>Средний индекс согласия: {summary.mean_agreement_index === null ? '—' : `${Math.round(summary.mean_agreement_index * 100)}%`}</p><p>Распределение: {Object.entries(summary.distribution).map(([value, count]) => `${value}: ${count}`).join(' · ') || 'нет числовых голосов'}</p>{Object.keys(summary.special_cards).length > 0 && <p>Служебные карты: {Object.entries(summary.special_cards).map(([value, count]) => `${value}: ${count}`).join(' · ')}</p>}</div>
+}
+
+function JiraPanel({ room, token, onAction }: { room: Room; token: string; onAction: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const [baseUrl, setBaseUrl] = useState('')
+  const [email, setEmail] = useState('')
+  const [apiToken, setApiToken] = useState('')
+  const [jql, setJql] = useState('project = YOUR_PROJECT ORDER BY created DESC')
+  const [issues, setIssues] = useState<JiraIssue[]>([])
+  const [selected, setSelected] = useState<string[]>([])
+  const request = { connection: { base_url: baseUrl, email: email || null, api_token: apiToken }, jql, start_at: 0, max_results: 25 }
+  return <section className="panel jira"><h2>Jira</h2><label>Адрес Jira<input type="url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://company.atlassian.net" /></label><label>Email<input type="email" value={email} onChange={event => setEmail(event.target.value)} /></label><label>API token<input type="password" value={apiToken} onChange={event => setApiToken(event.target.value)} autoComplete="off" /></label><label>JQL<textarea value={jql} onChange={event => setJql(event.target.value)} rows={3} /></label><button className="secondary" disabled={!baseUrl || !apiToken || !jql} onClick={() => api.previewJira(room.code, request, token).then(result => { setIssues(result.issues); setSelected(result.issues.map(issue => issue.key)) })}>Показать задачи</button>{issues.length > 0 && <><ul className="jira-issues">{issues.map(issue => <li key={issue.key}><label><input type="checkbox" checked={selected.includes(issue.key)} onChange={() => setSelected(current => current.includes(issue.key) ? current.filter(key => key !== issue.key) : [...current, issue.key])} />{issue.key} · {issue.title}</label></li>)}</ul><button className="primary" disabled={!selected.length} onClick={() => void onAction(async () => { await api.importJira(room.code, { ...request, expected_version: room.version, selected_keys: selected }, token); setIssues([]); setSelected([]); setApiToken('') })}>Импортировать выбранные</button></>}<p className="muted">Токен используется только для запроса и не сохраняется.</p></section>
 }
 
 function TaskList({ room, token, canManage, onAction }: { room: Room; token: string; canManage: boolean; onAction: (fn: () => Promise<unknown>) => Promise<void> }) {

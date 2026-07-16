@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class CardType(StrEnum):
@@ -77,6 +77,56 @@ class TaskResponse(BaseModel):
     title: str
     position: int
     is_excluded: bool
+
+
+class JiraConnectionInput(BaseModel):
+    base_url: str = Field(min_length=8, max_length=2048)
+    email: str | None = Field(default=None, max_length=320)
+    api_token: SecretStr = Field(min_length=1, max_length=512)
+
+    @field_validator("base_url")
+    @classmethod
+    def normalize_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+
+class JiraPreviewRequest(BaseModel):
+    connection: JiraConnectionInput
+    jql: str = Field(min_length=1, max_length=2000)
+    start_at: int = Field(default=0, ge=0, le=10_000)
+    max_results: int = Field(default=25, ge=1, le=50)
+
+
+class JiraIssueResponse(BaseModel):
+    key: str
+    title: str
+    url: str
+    snapshot: dict[str, str | None]
+
+
+class JiraPreviewResponse(BaseModel):
+    issues: list[JiraIssueResponse]
+    start_at: int
+    max_results: int
+    total: int
+
+
+class JiraImportRequest(JiraPreviewRequest):
+    expected_version: int = Field(ge=0)
+    selected_keys: list[str] = Field(min_length=1, max_length=50)
+
+    @field_validator("selected_keys")
+    @classmethod
+    def validate_selected_keys(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if any(not value for value in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("Выбранные ключи задач должны быть уникальными")
+        return normalized
+
+
+class JiraImportResponse(BaseModel):
+    imported: list[TaskResponse]
+    version: int
 
 
 class DeckResponse(BaseModel):
@@ -167,6 +217,17 @@ class RoundHistoryResponse(BaseModel):
     revealed_at: datetime
     revealed_votes: list[dict[str, object]]
     metrics: dict[str, object]
+
+
+class SessionSummaryResponse(BaseModel):
+    revealed_round_count: int
+    total_vote_count: int
+    numeric_vote_count: int
+    special_vote_count: int
+    exact_consensus_count: int
+    mean_agreement_index: float | None
+    distribution: dict[str, int]
+    special_cards: dict[str, int]
 
 
 class ErrorBody(BaseModel):

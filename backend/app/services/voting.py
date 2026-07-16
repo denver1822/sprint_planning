@@ -1,4 +1,7 @@
+from collections import Counter
 from datetime import UTC, datetime
+from math import sqrt
+from statistics import median
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -143,10 +146,7 @@ async def reveal_round(
         }
         for v in round_.votes
     ]
-    metrics = {
-        "vote_count": len(revealed),
-        "numeric_vote_count": sum(v["is_numeric"] for v in revealed),
-    }
+    metrics = calculate_metrics(revealed)
     round_.state, round_.revealed_at = "REVEALED", datetime.now(UTC)
     room.state, room.version = "REVEALED", room.version + 1
     session.add(RoundResult(round_id=round_.id, revealed_votes=revealed, metrics=metrics))
@@ -222,6 +222,9 @@ async def finish_room(session: AsyncSession, code: str, data: FinishRequest, tok
         )
     )
     await session.commit()
+    await session.refresh(
+        room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
+    )
     return serialize_room(room)
 
 
@@ -314,3 +317,60 @@ def _round_response(round_, version):
         state=round_.state,
         version=version,
     )
+
+
+def calculate_metrics(revealed_votes: list[dict[str, object]]) -> dict[str, object]:
+    numeric_values = [float(vote["card_value"]) for vote in revealed_votes if vote["is_numeric"]]
+    numeric_distribution = Counter(
+        str(vote["card_value"]) for vote in revealed_votes if vote["is_numeric"]
+    )
+    special_cards = Counter(
+        str(vote["card_value"]) for vote in revealed_votes if not vote["is_numeric"]
+    )
+    numeric_count = len(numeric_values)
+    base: dict[str, object] = {
+        "vote_count": len(revealed_votes),
+        "numeric_vote_count": numeric_count,
+        "special_vote_count": len(revealed_votes) - numeric_count,
+        "distribution": dict(numeric_distribution),
+        "special_cards": dict(special_cards),
+        "mean": None,
+        "median": None,
+        "min": None,
+        "max": None,
+        "range": None,
+        "stddev": None,
+        "coefficient_of_variation": None,
+        "mode_share": None,
+        "exact_consensus": False,
+        "agreement_index": None,
+    }
+    if not numeric_values:
+        return base
+    mean = sum(numeric_values) / numeric_count
+    minimum, maximum = min(numeric_values), max(numeric_values)
+    value_range = maximum - minimum
+    stddev = sqrt(sum((value - mean) ** 2 for value in numeric_values) / numeric_count)
+    mode_share = max(Counter(numeric_values).values()) / numeric_count
+    agreement_index: float | None
+    if numeric_count < 2:
+        agreement_index = None
+    elif value_range == 0:
+        agreement_index = 1.0
+    else:
+        agreement_index = max(0.0, min(1.0, 1 - stddev / value_range))
+    base.update(
+        {
+            "mean": mean,
+            "median": float(median(numeric_values)),
+            "min": minimum,
+            "max": maximum,
+            "range": value_range,
+            "stddev": stddev,
+            "coefficient_of_variation": stddev / mean if mean else None,
+            "mode_share": mode_share,
+            "exact_consensus": numeric_count >= 2 and value_range == 0,
+            "agreement_index": agreement_index,
+        }
+    )
+    return base

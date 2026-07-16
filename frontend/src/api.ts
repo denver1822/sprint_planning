@@ -24,6 +24,9 @@ export type Round = { id: string; task_id: string | null; sequence: number; stat
 export type Reveal = { round: Round; revealed_votes: Array<{ display_name: string; card_value: string; is_numeric: boolean }>; metrics: Record<string, unknown> }
 export type RoomSnapshot = { room: Room; active_round: Round | null }
 export type HistoryItem = { id: string; sequence: number; task_id: string | null; task_title: string | null; revealed_at: string; revealed_votes: Array<{ display_name: string; card_value: string; is_numeric: boolean }>; metrics: Record<string, unknown> }
+export type JiraIssue = { key: string; title: string; url: string; snapshot: Record<string, string | null> }
+export type JiraPreview = { issues: JiraIssue[]; start_at: number; max_results: number; total: number }
+export type SessionSummary = { revealed_round_count: number; total_vote_count: number; numeric_vote_count: number; special_vote_count: number; exact_consensus_count: number; mean_agreement_index: number | null; distribution: Record<string, number>; special_cards: Record<string, number> }
 
 type ApiError = { error?: { message?: string } }
 
@@ -46,6 +49,7 @@ export const api = {
   getRoom: (code: string) => request<Room>(`/rooms/${encodeURIComponent(code)}`),
   getSnapshot: (code: string) => request<RoomSnapshot>(`/rooms/${encodeURIComponent(code)}/snapshot`),
   getHistory: (code: string) => request<HistoryItem[]>(`/rooms/${encodeURIComponent(code)}/history`),
+  getSessionSummary: (code: string, token: string) => request<SessionSummary>(`/rooms/${encodeURIComponent(code)}/summary`, {}, token),
   joinRoom: (code: string, displayName: string | null, token?: string | null) =>
     request<Session>(`/rooms/${encodeURIComponent(code)}/join`, { method: 'POST', body: JSON.stringify(displayName ? { display_name: displayName } : {}) }, token),
   updateRoom: (code: string, version: number, body: Record<string, unknown>, token: string) =>
@@ -56,6 +60,10 @@ export const api = {
     request<void>(`/rooms/${code}/tasks/order`, { method: 'PUT', body: JSON.stringify({ task_ids: taskIds, expected_version: version }) }, token),
   setActiveTask: (code: string, taskId: string | null, version: number, token: string) =>
     request<void>(`/rooms/${code}/active-task`, { method: 'PUT', body: JSON.stringify({ task_id: taskId, expected_version: version }) }, token),
+  previewJira: (code: string, body: Record<string, unknown>, token: string) =>
+    request<JiraPreview>(`/rooms/${code}/jira/preview`, { method: 'POST', body: JSON.stringify(body) }, token),
+  importJira: (code: string, body: Record<string, unknown>, token: string) =>
+    request(`/rooms/${code}/jira/import`, { method: 'POST', body: JSON.stringify(body) }, token),
   startRound: (code: string, version: number, token: string) =>
     request<Round>(`/rooms/${code}/rounds`, { method: 'POST', body: JSON.stringify({ expected_version: version, client_command_id: crypto.randomUUID() }) }, token),
   vote: (code: string, roundId: string, cardValue: string | null, token: string) =>
