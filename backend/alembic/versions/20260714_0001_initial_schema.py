@@ -1,4 +1,4 @@
-"""Create the Planning Poker core schema.
+"""Create the Scrum Planning core schema.
 
 Revision ID: 20260714_0001
 Revises:

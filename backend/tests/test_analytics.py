@@ -1,6 +1,19 @@
+from types import SimpleNamespace
+
 import pytest
 
-from app.services.voting import calculate_metrics
+from app.services.voting import _next_unestimated_task, calculate_metrics
+
+
+def test_next_task_skips_the_task_that_was_just_estimated() -> None:
+    first = SimpleNamespace(
+        id="first", position=0, is_excluded=False, rounds=[SimpleNamespace(votes=[object()])]
+    )
+    second = SimpleNamespace(id="second", position=1, is_excluded=False, rounds=[])
+    third = SimpleNamespace(id="third", position=2, is_excluded=False, rounds=[])
+    room = SimpleNamespace(tasks=[first, second, third])
+
+    assert _next_unestimated_task(room) is second
 
 
 def test_metrics_exclude_special_cards_from_numeric_calculations() -> None:

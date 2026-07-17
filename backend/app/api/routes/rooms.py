@@ -95,13 +95,20 @@ async def get_history_endpoint(code: str, session: Session) -> list[RoundHistory
             .order_by(VotingRound.sequence)
         )
     ).all()
+    latest_by_task = {}
+    for round_ in rounds:
+        if round_.result is not None and round_.revealed_at is not None:
+            latest_by_task[round_.task_id or round_.id] = round_
+    history_rounds = sorted(
+        latest_by_task.values(),
+        key=lambda round_: round_.task.position if round_.task is not None else round_.sequence,
+    )
     return [
         RoundHistoryResponse(
             id=round_.id,
-            sequence=round_.sequence,
+            sequence=round_.task.position + 1 if round_.task is not None else round_.sequence,
             task_id=round_.task_id,
-            # The UI labels this record by its task number; do not duplicate the task title.
-            task_title=None,
+            task_title=round_.task.title if round_.task is not None else None,
             revealed_at=round_.revealed_at,
             revealed_votes=round_.result.revealed_votes,
             metrics={
@@ -113,8 +120,7 @@ async def get_history_endpoint(code: str, session: Session) -> list[RoundHistory
                 ),
             },
         )
-        for round_ in rounds
-        if round_.result is not None and round_.revealed_at is not None
+        for round_ in history_rounds
     ]
 
 
@@ -135,7 +141,7 @@ async def export_tasks_endpoint(code: str, session: Session, token: ParticipantT
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="planning-poker-{code}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="scrum-planning-{code}.xlsx"'},
     )
 
 

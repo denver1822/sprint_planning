@@ -14,7 +14,7 @@ from app.core.logging import RequestLoggingMiddleware
 
 settings = get_settings()
 
-app = FastAPI(title="Planning Poker API", version="0.1.0")
+app = FastAPI(title="Scrum Planning API", version="0.1.0")
 logging.basicConfig(level=settings.log_level)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(

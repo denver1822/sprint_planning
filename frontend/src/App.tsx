@@ -129,6 +129,12 @@ function RoomScreen({ code }: { code: string }) {
       setError(error instanceof Error ? error.message : 'Не удалось создать новую сессию')
     }
   }
+  useEffect(() => {
+    document.querySelectorAll<HTMLSpanElement>('.history-row > span').forEach((element, index) => {
+      const item = history[index]
+      if (item?.task_title) element.textContent = item.task_title
+    })
+  }, [history, room?.version])
   if (loading) return <main className="center">Загружаем комнату…</main>
   if (!room) return <main className="center"><p role="alert">{error || 'Комната не найдена'}</p><a href="/">На главную</a></main>
   if (!token || !self) return <main className="join-page"><section><span className="eyebrow">Приглашение в комнату</span><h1>{room.name}</h1><p>Введите имя, чтобы присоединиться к оценке.</p><form onSubmit={join}><label>Ваше имя<input value={joinName} onChange={e => setJoinName(e.target.value)} required autoFocus /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="primary">Войти в комнату</button></form></section></main>
@@ -140,7 +146,7 @@ function RoomScreen({ code }: { code: string }) {
       const url = URL.createObjectURL(file)
       const link = document.createElement('a')
       link.href = url
-      link.download = `planning-poker-${code}.xlsx`
+      link.download = `scrum-planning-${code}.xlsx`
       link.click()
       URL.revokeObjectURL(url)
       setNotice('Excel-файл сформирован')
@@ -189,6 +195,11 @@ function TaskList({ room, token, canManage, canAdd, canEstimate, onAction }: { r
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null)
   const tasks = [...room.tasks].sort((left, right) => left.position - right.position)
   const activeTask = tasks.find(task => task.id === room.active_task_id)
+  useEffect(() => {
+    document.querySelectorAll<HTMLButtonElement>('.tasks .task-title').forEach(button => {
+      button.disabled = room.state === 'VOTING'
+    })
+  }, [room.state, tasks])
   const reorder = (targetTask: Task) => {
     if (!draggedTaskId || targetTask.is_locked || draggedTaskId === targetTask.id) return
     const source = tasks.find(task => task.id === draggedTaskId)
@@ -243,12 +254,48 @@ function RoundPanel({ room, round, self, token, onAction, onError, onReveal, onC
   const selectedValue =
     selectedCard !== null && selectedCard.roundId === round?.id ? selectedCard.value : null
   const code = room.code
+  const selectedTask = round?.task_id ? room.tasks.find(task => task.id === round?.task_id) : null
+  if (round && selectedTask) round = { ...round, sequence: selectedTask.position + 1 }
   useEffect(() => { if (room.state === 'REVEALED' && round) void api.getHistory(code).then(items => setRevealMetrics(items.find(item => item.id === round.id)?.metrics ?? null)) }, [code, room.state, round])
+  const taskTitle = selectedTask?.title ?? (round ? `Задача ${round.sequence}` : '')
+  if (room.state === 'REVEALED' && round) {
+    const canSetEstimate = self.is_owner || room.estimate_editor_participant_id === self.id
+    return <section className="panel results-panel">
+      <span className="eyebrow">{taskTitle}</span>
+      <h2>Оценки раскрыты</h2>
+      <VotingTable room={room} revealedVotes={revealedVotes} />
+      <RevealStats metrics={revealMetrics} />
+      <div className="result-actions">
+        {canSetEstimate && round.task_id && <button className="secondary set-estimate-button" onClick={() => setEstimatePickerOpen(true)}>Выбрать итоговую оценку</button>}
+        <button className="secondary repeat-round-button" onClick={() => onAction(() => api.repeatRound(code, round.id, room.version, token))}>Повторное голосование</button>
+      </div>
+      <button className="primary" onClick={() => onAction(() => api.newRound(code, round.id, room.version, token))}>Следующая задача</button>
+      {estimatePickerOpen && round.task_id && <EstimateCardModal cards={room.deck.cards} taskId={round.task_id} room={room} token={token} onAction={onAction} onClose={() => setEstimatePickerOpen(false)} />}
+    </section>
+  }
+  if (room.state === 'VOTING' && round) return <VotingPanel room={room} round={round} self={self} token={token} selectedValue={selectedValue} taskTitle={taskTitle} onSelect={setSelectedCard} onAction={onAction} onError={onError} onReveal={reveal => { setRevealMetrics(reveal.metrics); onReveal(reveal) }} />
   if (room.state === 'FINISHED') return <section className="panel finished"><h2>Сессия завершена</h2><p>Комната доступна только для просмотра.</p><button className="primary" onClick={() => void onCreateSession()}>Создать новую сессию</button></section>
   if (room.state === 'LOBBY') return <section className="panel lobby"><span className="eyebrow">Лобби</span><h2>Готовы начать оценку?</h2><p>Любой подключённый участник может запустить оценку задачи.</p><button className="primary" onClick={() => onAction(() => api.startRound(code, room.version, token))}>Начать голосование</button></section>
   if (room.state === 'REVEALED' && round) { const canSetEstimate = self.is_owner || room.estimate_editor_participant_id === self.id; return <section className="panel results-panel"><span className="eyebrow">Задача {round.sequence}</span><h2>Оценки раскрыты</h2><VotingTable room={room} revealedVotes={revealedVotes} /><RevealStats metrics={revealMetrics} /><div className="result-actions">{canSetEstimate && round.task_id && <button className="secondary set-estimate-button" onClick={() => setEstimatePickerOpen(true)}>Выбрать итоговую оценку</button>}<button className="secondary repeat-round-button" onClick={() => onAction(() => api.repeatRound(code, round.id, room.version, token))}>Повторное голосование</button></div><button className="primary" onClick={() => onAction(() => api.newRound(code, round.id, room.version, token))}>Следующая задача</button>{estimatePickerOpen && round.task_id && <EstimateCardModal cards={room.deck.cards} taskId={round.task_id} room={room} token={token} onAction={onAction} onClose={() => setEstimatePickerOpen(false)} />}</section> }
   if (!round) return <section className="panel lobby"><span className="eyebrow">Синхронизация</span><h2>Подключаем задачу…</h2><p>Состояние комнаты обновляется автоматически.</p><button className="secondary" onClick={() => onAction(() => api.getSnapshot(code))}>Синхронизировать сейчас</button></section>
   return <section className="panel voting"><div className="round-top"><div><span className="eyebrow">Задача {round?.sequence ?? ''}</span><h2>Выберите карту</h2></div><button className="secondary" onClick={() => round && onAction(async () => { const reveal = await api.reveal(code, round.id, room.version, token); setRevealMetrics(reveal.metrics); onReveal(reveal) })}>Раскрыть карты</button></div><VotingTable room={room} />{self.is_observer ? <p className="muted">Вы наблюдаете за голосованием. Переключите режим администратора на «Голосую», чтобы получить колоду.</p> : self.has_voted ? <div className="confirmed-vote"><p className="vote-confirmation">Ваш выбор подтверждён. Карта лежит на столе рубашкой вверх.</p><button className="secondary" disabled={!round} onClick={() => round && onAction(() => api.cancelVote(code, round.id, token))}>Изменить голос</button></div> : <><div className="cards" role="group" aria-label="Колода">{room.deck.cards.map(card => <button className={`card${selectedValue === card.value ? ' selected' : ''}`} aria-pressed={selectedValue === card.value} key={card.value} onClick={() => round && setSelectedCard({ roundId: round.id, value: card.value })}><span>{card.value}</span></button>)}</div><div className="vote-actions"><button className="secondary" disabled={!selectedValue} onClick={() => setSelectedCard(null)}>Отменить выбор</button><button className="primary" disabled={!selectedValue || !round} onClick={() => round ? onAction(() => api.vote(code, round.id, selectedValue, token)) : onError('Задача не найдена')}>Подтвердить выбор</button></div><p className="vote-confirmation" aria-live="polite">{selectedValue ? `Выбрано: ${selectedValue}. Подтвердите выбор.` : 'Выберите карту — её значение останется скрытым.'}</p></>}<p className="muted">Значения карт раскроются одновременно.</p></section>
+}
+
+function VotingPanel({ room, round, self, token, selectedValue, taskTitle, onSelect, onAction, onError, onReveal }: { room: Room; round: Round; self: { is_observer: boolean; has_voted: boolean }; token: string; selectedValue: string | null; taskTitle: string; onSelect: (value: { roundId: string; value: string } | null) => void; onAction: (fn: () => Promise<unknown>) => Promise<void>; onError: (value: string) => void; onReveal: (reveal: Reveal) => void }) {
+  const code = room.code
+  return <section className="panel voting">
+    <div className="round-top">
+      <div><span className="eyebrow">{taskTitle}</span><h2>Выберите карту</h2></div>
+      <button className="secondary" onClick={() => void onAction(async () => onReveal(await api.reveal(code, round.id, room.version, token)))}>Раскрыть карты</button>
+    </div>
+    <VotingTable room={room} />
+    {self.is_observer ? <p className="muted">Вы наблюдаете за голосованием. Переключите режим администратора на «Голосую», чтобы получить колоду.</p> : self.has_voted ? <div className="confirmed-vote"><p className="vote-confirmation">Ваш выбор подтверждён. Карта лежит на столе рубашкой вверх.</p><button className="secondary" onClick={() => void onAction(() => api.cancelVote(code, round.id, token))}>Изменить голос</button></div> : <>
+      <div className="cards" role="group" aria-label="Колода">{room.deck.cards.map(card => <button className={`card${selectedValue === card.value ? ' selected' : ''}`} aria-pressed={selectedValue === card.value} key={card.value} onClick={() => onSelect({ roundId: round.id, value: card.value })}><span>{card.value}</span></button>)}</div>
+      <div className="vote-actions"><button className="secondary" disabled={!selectedValue} onClick={() => onSelect(null)}>Отменить выбор</button><button className="primary" disabled={!selectedValue} onClick={() => selectedValue ? void onAction(() => api.vote(code, round.id, selectedValue, token)) : onError('Задача не найдена')}>Подтвердить выбор</button></div>
+      <p className="vote-confirmation" aria-live="polite">{selectedValue ? `Выбрано: ${selectedValue}. Подтвердите выбор.` : 'Выберите карту — её значение останется скрытым.'}</p>
+    </>}
+    <p className="muted">Значения карт раскроются одновременно.</p>
+  </section>
 }
 
 function RevealStats({ metrics }: { metrics: Record<string, unknown> | null }) {

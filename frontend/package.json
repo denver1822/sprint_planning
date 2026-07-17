@@ -1,5 +1,5 @@
 {
-  "name": "planning-poker-frontend",
+  "name": "scrum-planning-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -30,4 +30,3 @@
     "vitest": "latest"
   }
 }
-

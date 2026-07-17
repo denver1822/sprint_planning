@@ -181,6 +181,8 @@ async def set_active_task(
         raise DomainError("participant_offline", "Участник не подключён", status_code=403)
     if room.state == "FINISHED":
         raise DomainError("room_finished", "Сессия завершена", status_code=409)
+    if room.state == "VOTING":
+        raise DomainError("round_in_progress", "Задачу нельзя переключить во время голосования", status_code=409)
     _version(room.version, payload.expected_version)
     if payload.task_id is not None:
         task = await session.get(TaskItem, payload.task_id)

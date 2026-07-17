@@ -52,13 +52,14 @@ async def start_round(
         )
         task = TaskItem(
             room_id=room.id,
-            title=f"Задача {round_.sequence}",
+            title=f"Задача {position + 1}",
             position=position,
             source="auto",
         )
         session.add(task)
         await session.flush()
         round_.task_id = task.id
+        room.active_task_id = task.id
     room.state, room.version = "VOTING", room.version + 1
     session.add(
         RoomAction(
@@ -166,7 +167,7 @@ async def reveal_round(
         )
         task = TaskItem(
             room_id=room.id,
-            title=f"Задача {round_.sequence}",
+            title=f"Задача {position + 1}",
             position=position,
             source="auto",
         )
@@ -210,12 +211,11 @@ async def new_round(
         raise DomainError(
             "invalid_round_state", "Новый раунд доступен после reveal", status_code=409
         )
-    previous_task = await session.get(TaskItem, previous.task_id) if previous.task_id else None
-    task_id = (
-        previous.task_id
-        if data.repeat_task
-        else room.active_task_id or (None if previous_task and previous_task.source == "auto" else previous.task_id)
+    manually_selected_task_id = (
+        room.active_task_id if room.active_task_id not in {None, previous.task_id} else None
     )
+    next_task = _next_unestimated_task(room)
+    task_id = previous.task_id if data.repeat_task else manually_selected_task_id or (next_task.id if next_task else None)
     if task_id is not None:
         task = await session.get(TaskItem, task_id)
         if task is None or task.room_id != room.id:
@@ -229,13 +229,16 @@ async def new_round(
         )
         task = TaskItem(
             room_id=room.id,
-            title=f"Задача {round_.sequence}",
+            title=f"Задача {position + 1}",
             position=position,
             source="auto",
         )
         session.add(task)
         await session.flush()
         round_.task_id = task.id
+        room.active_task_id = task.id
+    else:
+        room.active_task_id = task_id
     room.state, room.version = "VOTING", room.version + 1
     session.add(
         RoomAction(
@@ -273,6 +276,21 @@ async def finish_room(session: AsyncSession, code: str, data: FinishRequest, tok
         room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
     )
     return serialize_room(room)
+
+
+def _next_unestimated_task(room) -> TaskItem | None:
+    """Return the first task in the list that has not received a vote yet."""
+    tasks = sorted(
+        (
+            task
+            for task in room.tasks
+            if not task.is_excluded and not any(round_.votes for round_ in task.rounds)
+        ),
+        key=lambda task: task.position,
+    )
+    if not tasks:
+        return None
+    return tasks[0]
 
 
 async def _create_round(session, room_id, task_id):

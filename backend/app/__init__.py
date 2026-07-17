@@ -1,2 +1,1 @@
-"""Backend package for Planning Poker."""
-
+"""Backend package for Scrum Planning."""
