@@ -11,6 +11,7 @@ from app.db.models import RoomAction, TaskItem
 from app.schemas.rooms import (
     JiraImportRequest,
     JiraImportResponse,
+    JiraConnectionTestRequest,
     JiraIssueResponse,
     JiraPreviewRequest,
     JiraPreviewResponse,
@@ -27,6 +28,31 @@ async def preview_jira(
 ) -> JiraPreviewResponse:
     await _owner_room(session, code, token)
     return await _search(payload)
+
+
+async def test_jira_connection(
+    session: AsyncSession, code: str, payload: JiraConnectionTestRequest, token: str | None
+) -> None:
+    await _owner_room(session, code, token)
+    base_url = _safe_jira_base_url(payload.connection.base_url)
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {payload.connection.api_token.get_secret_value()}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=JIRA_TIMEOUT_SECONDS, follow_redirects=False) as client:
+            response = await client.get(f"{base_url}/rest/api/3/myself", headers=headers)
+            response.raise_for_status()
+            if len(response.content) > JIRA_MAX_RESPONSE_BYTES:
+                raise DomainError("jira_response_too_large", "Ответ Jira превышает допустимый размер", status_code=422)
+    except DomainError:
+        raise
+    except httpx.HTTPError:
+        raise DomainError(
+            "jira_connection_failed",
+            "Не удалось подключиться к Jira. Проверьте адрес и токен.",
+            status_code=422,
+        ) from None
 
 
 async def import_jira(
@@ -65,6 +91,8 @@ async def import_jira(
         )
         session.add(task)
         tasks.append(task)
+    if room.active_task_id is None and tasks:
+        room.active_task_id = tasks[0].id
     room.version += 1
     await session.flush()
     session.add(
@@ -92,8 +120,10 @@ async def _owner_room(session: AsyncSession, code: str, token: str | None, *, lo
 
 async def _search(payload: JiraPreviewRequest) -> JiraPreviewResponse:
     base_url = _safe_jira_base_url(payload.connection.base_url)
-    headers = {"Accept": "application/json"}
-    auth = (payload.connection.email or "", payload.connection.api_token.get_secret_value())
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {payload.connection.api_token.get_secret_value()}",
+    }
     try:
         async with httpx.AsyncClient(timeout=JIRA_TIMEOUT_SECONDS, follow_redirects=False) as client:
             response = await client.get(
@@ -105,7 +135,6 @@ async def _search(payload: JiraPreviewRequest) -> JiraPreviewResponse:
                     "fields": "summary,issuetype,status,project",
                 },
                 headers=headers,
-                auth=auth,
             )
             response.raise_for_status()
             if len(response.content) > JIRA_MAX_RESPONSE_BYTES:

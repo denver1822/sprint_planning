@@ -7,11 +7,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.errors import DomainError
 from app.core.security import new_participant_token, new_public_code, token_hash
-from app.db.models import Deck, Participant, Room
+from app.db.models import Deck, Participant, Room, TaskItem, Vote, VotingRound
 from app.schemas.rooms import (
     DeckInput,
     ParticipantResponse,
+    ParticipantRenameRequest,
     ParticipantSessionResponse,
+    ObserverModeRequest,
     RoomCreateRequest,
     RoomJoinRequest,
     RoomResponse,
@@ -28,7 +30,7 @@ def _room_query(code: str):
         .options(
             selectinload(Room.deck),
             selectinload(Room.participants),
-            selectinload(Room.tasks),
+            selectinload(Room.tasks).selectinload(TaskItem.rounds).selectinload(VotingRound.votes),
         )
     )
 
@@ -49,6 +51,7 @@ def serialize_participant(participant: Participant, owner_id: UUID | None) -> Pa
         display_name=participant.display_name,
         is_online=participant.is_online,
         is_owner=participant.id == owner_id,
+        is_observer=participant.is_observer,
     )
 
 
@@ -72,10 +75,13 @@ def serialize_room(room: Room) -> RoomResponse:
                 title=task.title,
                 position=task.position,
                 is_excluded=task.is_excluded,
+                is_locked=any(round_.votes for round_ in task.rounds),
+                final_estimate=task.final_estimate,
             )
             for task in room.tasks
         ],
         active_task_id=room.active_task_id,
+        estimate_editor_participant_id=room.estimate_editor_participant_id,
         created_at=room.created_at,
         updated_at=room.updated_at,
     )
@@ -167,6 +173,18 @@ async def join_room(
     )
 
 
+async def rename_participant(
+    session: AsyncSession, code: str, payload: ParticipantRenameRequest, token: str | None
+) -> Participant:
+    room = await get_room_or_404(session, code, lock=True)
+    participant = await _require_participant(session, room.id, token)
+    if room.state == "FINISHED":
+        raise DomainError("room_finished", "Сессия завершена", status_code=409)
+    participant.display_name = _normalize_name(payload.display_name)
+    await session.commit()
+    return participant
+
+
 async def update_room(
     session: AsyncSession,
     code: str,
@@ -197,6 +215,33 @@ async def update_room(
         room, attribute_names=["deck", "participants", "tasks", "created_at", "updated_at"]
     )
     return serialize_room(room)
+
+
+async def set_owner_observer(
+    session: AsyncSession, code: str, payload: ObserverModeRequest, token: str | None
+) -> int:
+    room = await get_room_or_404(session, code, lock=True)
+    participant = await _require_participant(session, room.id, token)
+    if participant.id != room.owner_participant_id:
+        raise DomainError("owner_required", "Режим может менять только администратор", status_code=403)
+    if room.version != payload.expected_version:
+        raise DomainError("room_version_conflict", "Состояние комнаты изменилось", status_code=409)
+    if payload.is_observer:
+        active_vote = await session.scalar(
+            select(Vote)
+            .join(VotingRound, VotingRound.id == Vote.round_id)
+            .where(
+                VotingRound.room_id == room.id,
+                VotingRound.state == "VOTING",
+                Vote.participant_id == participant.id,
+            )
+        )
+        if active_vote is not None:
+            await session.delete(active_vote)
+    participant.is_observer = payload.is_observer
+    room.version += 1
+    await session.commit()
+    return room.version
 
 
 async def _find_participant_by_token(

@@ -37,6 +37,8 @@ async def start_round(
             "invalid_room_state", "Раунд можно начать только из лобби", status_code=409
         )
     task_id = data.task_id if data.task_id is not None else room.active_task_id
+    if any(not task.is_excluded for task in room.tasks) and task_id is None:
+        raise DomainError("task_required", "Выберите задачу перед началом голосования", status_code=409)
     if task_id is not None:
         task = await session.get(TaskItem, task_id)
         if task is None or task.room_id != room.id:
@@ -44,6 +46,19 @@ async def start_round(
         if task.is_excluded:
             raise DomainError("task_excluded", "Исключённую задачу нельзя оценивать", status_code=409)
     round_ = await _create_round(session, room.id, task_id)
+    if task_id is None:
+        position = await session.scalar(
+            select(func.coalesce(func.max(TaskItem.position), -1) + 1).where(TaskItem.room_id == room.id)
+        )
+        task = TaskItem(
+            room_id=room.id,
+            title=f"Задача {round_.sequence}",
+            position=position,
+            source="auto",
+        )
+        session.add(task)
+        await session.flush()
+        round_.task_id = task.id
     room.state, room.version = "VOTING", room.version + 1
     session.add(
         RoomAction(
@@ -64,8 +79,8 @@ async def cast_vote(
 ) -> VoteResponse:
     room = await get_room_or_404(session, code, lock=True)
     participant = await _active_actor(session, room.id, token)
-    if participant.id == room.owner_participant_id:
-        raise DomainError("owner_cannot_vote", "Владелец не голосует в MVP", status_code=403)
+    if participant.is_observer:
+        raise DomainError("observer_cannot_vote", "Наблюдатель не участвует в голосовании", status_code=403)
     round_ = await _active_round(session, room.id, round_id)
     card = next((card for card in room.deck.cards if card["value"] == data.card_value), None)
     if card is None:
@@ -97,8 +112,6 @@ async def cancel_vote(
 ) -> int:
     room = await get_room_or_404(session, code, lock=True)
     participant = await _active_actor(session, room.id, token)
-    if participant.id == room.owner_participant_id:
-        raise DomainError("owner_cannot_vote", "Владелец не голосует в MVP", status_code=403)
     round_ = await _active_round(session, room.id, round_id)
     vote = (
         await session.scalars(
@@ -147,6 +160,19 @@ async def reveal_round(
         for v in round_.votes
     ]
     metrics = calculate_metrics(revealed)
+    if round_.task_id is None:
+        position = await session.scalar(
+            select(func.coalesce(func.max(TaskItem.position), -1) + 1).where(TaskItem.room_id == room.id)
+        )
+        task = TaskItem(
+            room_id=room.id,
+            title=f"Задача {round_.sequence}",
+            position=position,
+            source="auto",
+        )
+        session.add(task)
+        await session.flush()
+        round_.task_id = task.id
     round_.state, round_.revealed_at = "REVEALED", datetime.now(UTC)
     room.state, room.version = "REVEALED", room.version + 1
     session.add(RoundResult(round_id=round_.id, revealed_votes=revealed, metrics=metrics))
@@ -184,7 +210,32 @@ async def new_round(
         raise DomainError(
             "invalid_round_state", "Новый раунд доступен после reveal", status_code=409
         )
-    round_ = await _create_round(session, room.id, previous.task_id)
+    previous_task = await session.get(TaskItem, previous.task_id) if previous.task_id else None
+    task_id = (
+        previous.task_id
+        if data.repeat_task
+        else room.active_task_id or (None if previous_task and previous_task.source == "auto" else previous.task_id)
+    )
+    if task_id is not None:
+        task = await session.get(TaskItem, task_id)
+        if task is None or task.room_id != room.id:
+            raise DomainError("task_not_found", "Задача не найдена в этой комнате", status_code=404)
+        if task.is_excluded:
+            raise DomainError("task_excluded", "Исключённую задачу нельзя оценивать", status_code=409)
+    round_ = await _create_round(session, room.id, task_id)
+    if task_id is None:
+        position = await session.scalar(
+            select(func.coalesce(func.max(TaskItem.position), -1) + 1).where(TaskItem.room_id == room.id)
+        )
+        task = TaskItem(
+            room_id=room.id,
+            title=f"Задача {round_.sequence}",
+            position=position,
+            source="auto",
+        )
+        session.add(task)
+        await session.flush()
+        round_.task_id = task.id
     room.state, room.version = "VOTING", room.version + 1
     session.add(
         RoomAction(
@@ -203,10 +254,6 @@ async def new_round(
 async def finish_room(session: AsyncSession, code: str, data: FinishRequest, token: str | None):
     room = await get_room_or_404(session, code, lock=True)
     participant = await _require_participant(session, room.id, token)
-    if participant.id != room.owner_participant_id:
-        raise DomainError(
-            "owner_required", "Завершить сессию может только владелец", status_code=403
-        )
     await _version(session, room, data.expected_version)
     if room.state == "FINISHED":
         return serialize_room(room)

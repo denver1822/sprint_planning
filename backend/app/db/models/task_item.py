@@ -26,6 +26,7 @@ class TaskItem(TimestampMixin, Base):
     )
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    final_estimate: Mapped[str | None] = mapped_column(String(32), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     is_excluded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     jira_key: Mapped[str | None] = mapped_column(String(128), nullable=True)

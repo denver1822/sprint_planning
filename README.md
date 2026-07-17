@@ -16,7 +16,7 @@
 - Python 3.12+;
 - Node.js 20+ и npm;
 - PostgreSQL 15+;
-- свободные порты `5173` (frontend) и `8000` (backend).
+- свободные порты `5173` (frontend) и `8001` (backend).
 
 ### 1. Создать базу данных
 
@@ -56,14 +56,14 @@ LOG_LEVEL=INFO
 
 ```powershell
 .\.venv\Scripts\alembic.exe upgrade head
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
 Проверка:
 
-- API: <http://127.0.0.1:8000/docs>
-- liveness: <http://127.0.0.1:8000/api/health>
-- PostgreSQL readiness: <http://127.0.0.1:8000/api/ready>
+- API: <http://127.0.0.1:8001/docs>
+- liveness: <http://127.0.0.1:8001/api/health>
+- PostgreSQL readiness: <http://127.0.0.1:8001/api/ready>
 
 ### 3. Запустить frontend
 
@@ -75,7 +75,7 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-Откройте <http://127.0.0.1:5173>. Vite направляет запросы `/api` и `/ws` на backend `127.0.0.1:8000`.
+Откройте <http://127.0.0.1:5173>. Vite направляет запросы `/api` и `/ws` на backend `127.0.0.1:8001`.
 
 ### 4. Остановить приложение
 
@@ -104,14 +104,14 @@ npm run build
 Проверьте процесс на нужном порту:
 
 ```powershell
-netstat -ano | Select-String ':8000|:5173'
+netstat -ano | Select-String ':8001|:5173'
 ```
 
 Не завершайте неизвестный процесс. Либо освободите порт, либо запустите backend на другом порту и измените proxy в [frontend/vite.config.ts](frontend/vite.config.ts).
 
 ## Jira
 
-Jira-интеграция необязательна для локального запуска. Адрес Jira, email и API-токен вводятся владельцем комнаты только для preview/import; токен не сохраняется в базе данных.
+Jira-интеграция необязательна для локального запуска. Адрес Jira и API-токен вводятся владельцем комнаты только для проверки подключения, preview и import; токен не сохраняется в базе данных.
 
 ## Docker и production
 

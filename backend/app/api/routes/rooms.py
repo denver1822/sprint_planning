@@ -2,6 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import participant_token
@@ -10,13 +11,18 @@ from app.realtime.manager import room_connections
 from app.services.realtime import room_snapshot
 from app.schemas.rooms import (
     ActiveTaskRequest,
+    EstimateEditorRequest,
+    ObserverModeRequest,
+    FinalEstimateRequest,
     FinishRequest,
     JiraImportRequest,
     JiraImportResponse,
+    JiraConnectionTestRequest,
     JiraPreviewRequest,
     JiraPreviewResponse,
     NewRoundRequest,
     ParticipantSessionResponse,
+    ParticipantRenameRequest,
     RevealRequest,
     RevealResponse,
     RoomCreateRequest,
@@ -30,13 +36,24 @@ from app.schemas.rooms import (
     VoteRequest,
     VoteResponse,
     TaskCreateRequest,
+    TaskDeleteRequest,
     TaskReorderRequest,
     TaskResponse,
+    TaskUpdateRequest,
 )
-from app.services.rooms import create_room, get_room_or_404, join_room, serialize_room, update_room
-from app.services.jira import import_jira, preview_jira
+from app.services.rooms import create_room, get_room_or_404, join_room, rename_participant, serialize_room, set_owner_observer, update_room
+from app.services.jira import import_jira, preview_jira, test_jira_connection
 from app.services.analytics import session_summary
-from app.services.tasks import create_task, reorder_tasks, set_active_task
+from app.services.exports import export_tasks_xlsx
+from app.services.tasks import (
+    create_task,
+    delete_task,
+    reorder_tasks,
+    set_active_task,
+    set_estimate_editor,
+    set_final_estimate,
+    update_task,
+)
 from app.services.voting import cancel_vote, cast_vote, finish_room, new_round, reveal_round, start_round
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -83,10 +100,18 @@ async def get_history_endpoint(code: str, session: Session) -> list[RoundHistory
             id=round_.id,
             sequence=round_.sequence,
             task_id=round_.task_id,
-            task_title=round_.task.title if round_.task else None,
+            # The UI labels this record by its task number; do not duplicate the task title.
+            task_title=None,
             revealed_at=round_.revealed_at,
             revealed_votes=round_.result.revealed_votes,
-            metrics=round_.result.metrics,
+            metrics={
+                **round_.result.metrics,
+                "mean": (
+                    f"{float(round_.result.metrics['mean']):.1f}"
+                    if round_.result.metrics.get("mean") is not None
+                    else None
+                ),
+            },
         )
         for round_ in rounds
         if round_.result is not None and round_.revealed_at is not None
@@ -104,6 +129,16 @@ async def get_session_summary_endpoint(
     return await session_summary(session, code)
 
 
+@router.get("/{code}/export")
+async def export_tasks_endpoint(code: str, session: Session, token: ParticipantToken) -> Response:
+    content = await export_tasks_xlsx(session, code, token)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="planning-poker-{code}.xlsx"'},
+    )
+
+
 @router.post("/{code}/join", response_model=ParticipantSessionResponse)
 async def join_room_endpoint(
     code: str,
@@ -112,6 +147,13 @@ async def join_room_endpoint(
     token: ParticipantToken,
 ) -> ParticipantSessionResponse:
     return await join_room(session, code, payload, token)
+
+
+@router.put("/{code}/me/name", status_code=status.HTTP_204_NO_CONTENT)
+async def rename_participant_endpoint(
+    code: str, payload: ParticipantRenameRequest, session: Session, token: ParticipantToken
+) -> None:
+    await rename_participant(session, code, payload, token)
 
 
 @router.patch("/{code}", response_model=RoomResponse)
@@ -132,6 +174,29 @@ async def create_task_endpoint(
     return task
 
 
+@router.put("/{code}/tasks/{task_id}", response_model=TaskResponse)
+async def update_task_endpoint(
+    code: str,
+    task_id: UUID,
+    payload: TaskUpdateRequest,
+    session: Session,
+    token: ParticipantToken,
+) -> TaskResponse:
+    task, _ = await update_task(session, code, task_id, payload, token)
+    return task
+
+
+@router.delete("/{code}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_endpoint(
+    code: str,
+    task_id: UUID,
+    payload: TaskDeleteRequest,
+    session: Session,
+    token: ParticipantToken,
+) -> None:
+    await delete_task(session, code, task_id, payload, token)
+
+
 @router.put("/{code}/tasks/order", status_code=status.HTTP_204_NO_CONTENT)
 async def reorder_tasks_endpoint(
     code: str, payload: TaskReorderRequest, session: Session, token: ParticipantToken
@@ -146,11 +211,44 @@ async def set_active_task_endpoint(
     await set_active_task(session, code, payload, token)
 
 
+@router.put("/{code}/estimate-editor", status_code=status.HTTP_204_NO_CONTENT)
+async def set_estimate_editor_endpoint(
+    code: str, payload: EstimateEditorRequest, session: Session, token: ParticipantToken
+) -> None:
+    await set_estimate_editor(session, code, payload, token)
+
+
+@router.put("/{code}/observer", status_code=status.HTTP_204_NO_CONTENT)
+async def set_observer_mode_endpoint(
+    code: str, payload: ObserverModeRequest, session: Session, token: ParticipantToken
+) -> None:
+    await set_owner_observer(session, code, payload, token)
+
+
+@router.put("/{code}/tasks/{task_id}/final-estimate", response_model=TaskResponse)
+async def set_final_estimate_endpoint(
+    code: str,
+    task_id: UUID,
+    payload: FinalEstimateRequest,
+    session: Session,
+    token: ParticipantToken,
+) -> TaskResponse:
+    result, _ = await set_final_estimate(session, code, task_id, payload, token)
+    return result
+
+
 @router.post("/{code}/jira/preview", response_model=JiraPreviewResponse)
 async def jira_preview_endpoint(
     code: str, payload: JiraPreviewRequest, session: Session, token: ParticipantToken
 ) -> JiraPreviewResponse:
     return await preview_jira(session, code, payload, token)
+
+
+@router.post("/{code}/jira/test", status_code=status.HTTP_204_NO_CONTENT)
+async def jira_connection_test_endpoint(
+    code: str, payload: JiraConnectionTestRequest, session: Session, token: ParticipantToken
+) -> None:
+    await test_jira_connection(session, code, payload, token)
 
 
 @router.post("/{code}/jira/import", response_model=JiraImportResponse)

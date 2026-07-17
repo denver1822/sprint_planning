@@ -45,6 +45,10 @@ class RoomJoinRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
 
 
+class ParticipantRenameRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
 class RoomUpdateRequest(BaseModel):
     expected_version: int = Field(ge=0)
     name: str | None = Field(default=None, min_length=1, max_length=160)
@@ -62,6 +66,15 @@ class TaskCreateRequest(BaseModel):
     expected_version: int = Field(ge=0)
 
 
+class TaskUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    expected_version: int = Field(ge=0)
+
+
+class TaskDeleteRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+
+
 class TaskReorderRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1)
     expected_version: int = Field(ge=0)
@@ -72,16 +85,32 @@ class ActiveTaskRequest(BaseModel):
     expected_version: int = Field(ge=0)
 
 
+class EstimateEditorRequest(BaseModel):
+    participant_id: UUID | None = None
+    expected_version: int = Field(ge=0)
+
+
+class ObserverModeRequest(BaseModel):
+    is_observer: bool
+    expected_version: int = Field(ge=0)
+
+
+class FinalEstimateRequest(BaseModel):
+    value: str = Field(min_length=1, max_length=32)
+    expected_version: int = Field(ge=0)
+
+
 class TaskResponse(BaseModel):
     id: UUID
     title: str
     position: int
     is_excluded: bool
+    is_locked: bool = False
+    final_estimate: str | None = None
 
 
 class JiraConnectionInput(BaseModel):
     base_url: str = Field(min_length=8, max_length=2048)
-    email: str | None = Field(default=None, max_length=320)
     api_token: SecretStr = Field(min_length=1, max_length=512)
 
     @field_validator("base_url")
@@ -95,6 +124,10 @@ class JiraPreviewRequest(BaseModel):
     jql: str = Field(min_length=1, max_length=2000)
     start_at: int = Field(default=0, ge=0, le=10_000)
     max_results: int = Field(default=25, ge=1, le=50)
+
+
+class JiraConnectionTestRequest(BaseModel):
+    connection: JiraConnectionInput
 
 
 class JiraIssueResponse(BaseModel):
@@ -139,6 +172,7 @@ class ParticipantResponse(BaseModel):
     display_name: str
     is_online: bool
     is_owner: bool
+    is_observer: bool = False
     has_voted: bool = False
 
 
@@ -153,6 +187,7 @@ class RoomResponse(BaseModel):
     participants: list[ParticipantResponse]
     tasks: list[TaskResponse] = Field(default_factory=list)
     active_task_id: UUID | None = None
+    estimate_editor_participant_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -173,6 +208,7 @@ class RoundStartRequest(BaseModel):
 class NewRoundRequest(BaseModel):
     expected_version: int = Field(ge=0)
     client_command_id: UUID
+    repeat_task: bool = False
 
 
 class VoteRequest(BaseModel):

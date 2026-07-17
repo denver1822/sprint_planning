@@ -47,23 +47,36 @@ async def has_voted_in_active_round(
 
 async def room_snapshot(session: AsyncSession, room_code: str) -> dict[str, object]:
     room = await get_room_or_404(session, room_code)
-    active_round = (
-        await session.scalars(
-            select(VotingRound)
-            .where(VotingRound.room_id == room.id, VotingRound.state == "VOTING")
-            .options(selectinload(VotingRound.votes))
-        )
-    ).one_or_none()
+    snapshot_round = None
+    if room.state == "VOTING":
+        snapshot_round = (
+            await session.scalars(
+                select(VotingRound)
+                .where(VotingRound.room_id == room.id, VotingRound.state == "VOTING")
+                .options(selectinload(VotingRound.votes))
+            )
+        ).one_or_none()
+    elif room.state == "REVEALED":
+        snapshot_round = (
+            await session.scalars(
+                select(VotingRound)
+                .where(VotingRound.room_id == room.id, VotingRound.state == "REVEALED")
+                .order_by(VotingRound.sequence.desc())
+                .limit(1)
+            )
+        ).one_or_none()
     voted_participant_ids: set[UUID] = set()
     active_round_payload: dict[str, object] | None = None
-    if active_round is not None:
-        voted_participant_ids = {vote.participant_id for vote in active_round.votes}
+    if snapshot_round is not None:
+        if room.state == "VOTING":
+            voted_participant_ids = {vote.participant_id for vote in snapshot_round.votes}
         active_round_payload = {
-            "id": active_round.id,
-            "task_id": active_round.task_id,
-            "sequence": active_round.sequence,
-            "state": active_round.state,
-            "started_at": active_round.started_at,
+            "id": snapshot_round.id,
+            "task_id": snapshot_round.task_id,
+            "sequence": snapshot_round.sequence,
+            "state": snapshot_round.state,
+            "version": room.version,
+            "started_at": snapshot_round.started_at,
         }
 
     serialized_room = serialize_room(room).model_dump(mode="json")
@@ -73,6 +86,7 @@ async def room_snapshot(session: AsyncSession, room_code: str) -> dict[str, obje
             display_name=participant.display_name,
             is_online=participant.is_online,
             is_owner=participant.id == room.owner_participant_id,
+            is_observer=participant.is_observer,
             has_voted=participant.id in voted_participant_ids,
         ).model_dump(mode="json")
         for participant in sorted(room.participants, key=lambda item: item.created_at)
@@ -89,6 +103,7 @@ def presence_message(participant: Participant, owner_id: UUID | None, has_voted:
             display_name=participant.display_name,
             is_online=participant.is_online,
             is_owner=participant.id == owner_id,
+            is_observer=participant.is_observer,
             has_voted=has_voted,
         ).model_dump(mode="json"),
     }

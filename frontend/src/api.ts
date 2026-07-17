@@ -1,9 +1,11 @@
 export type Card = { value: string; type: 'numeric' | 'special' }
+export type DeckInput = { kind: string; cards?: Card[] }
 export type Participant = {
   id: string
   display_name: string
   is_online: boolean
   is_owner: boolean
+  is_observer: boolean
   has_voted: boolean
 }
 export type Room = {
@@ -15,10 +17,11 @@ export type Room = {
   participants: Participant[]
   tasks: Task[]
   active_task_id: string | null
+  estimate_editor_participant_id: string | null
   created_at: string
   updated_at: string
 }
-export type Task = { id: string; title: string; position: number; is_excluded: boolean }
+export type Task = { id: string; title: string; position: number; is_excluded: boolean; is_locked: boolean; final_estimate: string | null }
 export type Session = { room: Room; participant: Participant; participant_token: string | null; restored: boolean }
 export type Round = { id: string; task_id: string | null; sequence: number; state: string; version: number }
 export type Reveal = { round: Round; revealed_votes: Array<{ display_name: string; card_value: string; is_numeric: boolean }>; metrics: Record<string, unknown> }
@@ -43,25 +46,49 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string |
   return response.json() as Promise<T>
 }
 
+async function download(path: string, token: string): Promise<Blob> {
+  const response = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as ApiError
+    throw new Error(body.error?.message ?? 'Не удалось сформировать файл')
+  }
+  return response.blob()
+}
+
 export const api = {
-  createRoom: (name: string, ownerName: string, kind: string) =>
-    request<Session>('/rooms', { method: 'POST', body: JSON.stringify({ name, owner_name: ownerName, deck: { kind } }) }),
+  createRoom: (name: string, ownerName: string, deck: DeckInput) =>
+    request<Session>('/rooms', { method: 'POST', body: JSON.stringify({ name, owner_name: ownerName, deck }) }),
   getRoom: (code: string) => request<Room>(`/rooms/${encodeURIComponent(code)}`),
   getSnapshot: (code: string) => request<RoomSnapshot>(`/rooms/${encodeURIComponent(code)}/snapshot`),
   getHistory: (code: string) => request<HistoryItem[]>(`/rooms/${encodeURIComponent(code)}/history`),
   getSessionSummary: (code: string, token: string) => request<SessionSummary>(`/rooms/${encodeURIComponent(code)}/summary`, {}, token),
+  exportTasks: (code: string, token: string) => download(`/rooms/${encodeURIComponent(code)}/export`, token),
   joinRoom: (code: string, displayName: string | null, token?: string | null) =>
     request<Session>(`/rooms/${encodeURIComponent(code)}/join`, { method: 'POST', body: JSON.stringify(displayName ? { display_name: displayName } : {}) }, token),
+  renameSelf: (code: string, displayName: string, token: string) =>
+    request<void>(`/rooms/${encodeURIComponent(code)}/me/name`, { method: 'PUT', body: JSON.stringify({ display_name: displayName }) }, token),
   updateRoom: (code: string, version: number, body: Record<string, unknown>, token: string) =>
     request<Room>(`/rooms/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify({ ...body, expected_version: version }) }, token),
   createTask: (code: string, title: string, version: number, token: string) =>
     request<Task>(`/rooms/${code}/tasks`, { method: 'POST', body: JSON.stringify({ title, expected_version: version }) }, token),
+  updateTask: (code: string, taskId: string, title: string, version: number, token: string) =>
+    request<Task>(`/rooms/${code}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify({ title, expected_version: version }) }, token),
+  deleteTask: (code: string, taskId: string, version: number, token: string) =>
+    request<void>(`/rooms/${code}/tasks/${taskId}`, { method: 'DELETE', body: JSON.stringify({ expected_version: version }) }, token),
   reorderTasks: (code: string, taskIds: string[], version: number, token: string) =>
     request<void>(`/rooms/${code}/tasks/order`, { method: 'PUT', body: JSON.stringify({ task_ids: taskIds, expected_version: version }) }, token),
   setActiveTask: (code: string, taskId: string | null, version: number, token: string) =>
     request<void>(`/rooms/${code}/active-task`, { method: 'PUT', body: JSON.stringify({ task_id: taskId, expected_version: version }) }, token),
+  setEstimateEditor: (code: string, participantId: string | null, version: number, token: string) =>
+    request<void>(`/rooms/${code}/estimate-editor`, { method: 'PUT', body: JSON.stringify({ participant_id: participantId, expected_version: version }) }, token),
+  setObserverMode: (code: string, isObserver: boolean, version: number, token: string) =>
+    request<void>(`/rooms/${code}/observer`, { method: 'PUT', body: JSON.stringify({ is_observer: isObserver, expected_version: version }) }, token),
+  setFinalEstimate: (code: string, taskId: string, value: string, version: number, token: string) =>
+    request<Task>(`/rooms/${code}/tasks/${taskId}/final-estimate`, { method: 'PUT', body: JSON.stringify({ value, expected_version: version }) }, token),
   previewJira: (code: string, body: Record<string, unknown>, token: string) =>
     request<JiraPreview>(`/rooms/${code}/jira/preview`, { method: 'POST', body: JSON.stringify(body) }, token),
+  testJiraConnection: (code: string, body: Record<string, unknown>, token: string) =>
+    request<void>(`/rooms/${code}/jira/test`, { method: 'POST', body: JSON.stringify(body) }, token),
   importJira: (code: string, body: Record<string, unknown>, token: string) =>
     request(`/rooms/${code}/jira/import`, { method: 'POST', body: JSON.stringify(body) }, token),
   startRound: (code: string, version: number, token: string) =>
@@ -74,6 +101,8 @@ export const api = {
     request<Reveal>(`/rooms/${code}/rounds/${roundId}/reveal`, { method: 'POST', body: JSON.stringify({ expected_version: version, client_command_id: crypto.randomUUID() }) }, token),
   newRound: (code: string, roundId: string, version: number, token: string) =>
     request<Round>(`/rooms/${code}/rounds/${roundId}/new`, { method: 'POST', body: JSON.stringify({ expected_version: version, client_command_id: crypto.randomUUID() }) }, token),
+  repeatRound: (code: string, roundId: string, version: number, token: string) =>
+    request<Round>(`/rooms/${code}/rounds/${roundId}/new`, { method: 'POST', body: JSON.stringify({ expected_version: version, client_command_id: crypto.randomUUID(), repeat_task: true }) }, token),
   finish: (code: string, version: number, token: string) =>
     request<Room>(`/rooms/${code}/finish`, { method: 'POST', body: JSON.stringify({ expected_version: version, client_command_id: crypto.randomUUID() }) }, token),
 }

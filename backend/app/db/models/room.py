@@ -39,6 +39,9 @@ class Room(TimestampMixin, Base):
     active_task_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("task_items.id", ondelete="SET NULL"), nullable=True
     )
+    estimate_editor_participant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("participants.id", ondelete="SET NULL"), nullable=True
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     deck: Mapped["Deck"] = relationship(back_populates="room", uselist=False, cascade="all, delete-orphan")
@@ -55,6 +58,9 @@ class Room(TimestampMixin, Base):
         order_by="TaskItem.position",
     )
     active_task: Mapped["TaskItem | None"] = relationship(foreign_keys=[active_task_id])
+    estimate_editor: Mapped["Participant | None"] = relationship(
+        foreign_keys=[estimate_editor_participant_id]
+    )
     rounds: Mapped[list["VotingRound"]] = relationship(
         back_populates="room", cascade="all, delete-orphan", order_by="VotingRound.sequence"
     )
