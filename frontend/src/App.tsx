@@ -255,7 +255,6 @@ function RoundPanel({ room, round, self, token, onAction, onError, onReveal, onC
     selectedCard !== null && selectedCard.roundId === round?.id ? selectedCard.value : null
   const code = room.code
   const selectedTask = round?.task_id ? room.tasks.find(task => task.id === round?.task_id) : null
-  if (round && selectedTask) round = { ...round, sequence: selectedTask.position + 1 }
   useEffect(() => { if (room.state === 'REVEALED' && round) void api.getHistory(code).then(items => setRevealMetrics(items.find(item => item.id === round.id)?.metrics ?? null)) }, [code, room.state, round])
   const taskTitle = selectedTask?.title ?? (round ? `Задача ${round.sequence}` : '')
   if (room.state === 'REVEALED' && round) {
